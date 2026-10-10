@@ -1,0 +1,37 @@
+#!/usr/bin/python3 -I
+# ZaSlon: принудительная команда для ключа панели (command= в authorized_keys пользователя sec_fw-admin).
+# Разрешает только запуск zaslon-helper с известными подкомандами; адрес панели (--peer) берёт из SSH_CLIENT.
+import os
+import shlex
+import sys
+
+HELPER = "/usr/local/libexec/zaslon/zaslon-helper"
+ALLOWED = {"version", "collect", "nft-table", "avc", "apply", "confirm", "rollback", "pending", "history"}
+
+
+def deny(msg):
+    sys.stdout.write('{"ok": false, "error": "ZaSlon: %s"}\n' % msg)
+    sys.exit(1)
+
+
+try:
+    t = shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
+except ValueError:
+    deny("неразборчивая команда")
+if t[:3] == ["sudo", "-n", HELPER]:
+    t = t[3:]
+elif t[:1] in (["zaslon-helper"], [HELPER]):
+    t = t[1:]
+args, skip = [], False
+for x in t:
+    if skip:
+        skip = False
+        continue
+    if x == "--peer":
+        skip = True
+        continue
+    args.append(x)
+if not args or args[0] not in ALLOWED:
+    deny("команда не разрешена")
+peer = (os.environ.get("SSH_CLIENT", "").split() or [""])[0]
+os.execv("/usr/bin/sudo", ["sudo", "-n", HELPER] + args + (["--peer", peer] if peer else []))

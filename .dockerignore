@@ -1,0 +1,9 @@
+data
+.env
+shots
+reports
+tests
+tools
+__pycache__
+*.pyc
+.git

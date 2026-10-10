@@ -1,0 +1,4 @@
+# Единые окончания строк: скрипты исполняются на Linux и macOS
+* text=auto eol=lf
+*.png binary
+*.woff binary
