@@ -112,9 +112,11 @@ footer { margin-top: 24px; border-top: 1px solid #d9dee3; padding-top: 6px; colo
                 box-shadow: 0 1px 6px rgba(0,0,0,.12); } }
 """
 
-LOGO = ("<svg viewBox='0 0 32 32' aria-hidden='true'><rect x='2' y='2' width='28' height='28' rx='6' fill='#1d2329'/>"
-        "<path d='M9 10h14l-14 12h14' fill='none' stroke='#7fb6d3' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/>"
-        "<path d='M6 16h3M23 16h3' stroke='#7fb6d3' stroke-width='2' stroke-linecap='round'/></svg>")
+LOGO = ("<svg viewBox='0 0 64 64' aria-hidden='true'><rect width='64' height='64' rx='15' fill='#182027'/>"
+        "<g fill='#5a6d7e'><rect x='10' y='15' width='20.5' height='9.5' rx='2'/><rect x='33.5' y='15' width='20.5' height='9.5' rx='2'/>"
+        "<rect x='10' y='27.25' width='9' height='9.5' rx='2'/><rect x='45' y='27.25' width='9' height='9.5' rx='2'/>"
+        "<rect x='10' y='39.5' width='20.5' height='9.5' rx='2'/><rect x='33.5' y='39.5' width='20.5' height='9.5' rx='2'/></g>"
+        "<rect x='22' y='27.25' width='20' height='9.5' rx='2' fill='#6fa8c9'/></svg>")
 
 
 def render(h, view, audit):

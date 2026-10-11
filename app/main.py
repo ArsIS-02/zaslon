@@ -20,7 +20,7 @@ from . import analysis, report, store
 from .transport import HostError, reset_hostkey, transport_for
 
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 _host_locks = {}
 
 
@@ -59,6 +59,11 @@ def host_view(h):
 
 
 # ------------------------------------------------------------------ pages
+def _icon(rel, media_type):
+    """Значки и манифест по адресам, которые браузеры запрашивают сами (ярлыки, плитки, «На главный экран»)."""
+    return FileResponse(os.path.join(STATIC, rel), media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
 async def index(request):
     return FileResponse(os.path.join(STATIC, "index.html"), headers={"Cache-Control": "no-store"})
 
@@ -345,6 +350,10 @@ async def http_error(request, exc):
 routes = [
     Route("/", index),
     Route("/healthz", healthz),
+    Route("/favicon.ico", lambda r: _icon("icons/favicon.ico", "image/x-icon")),
+    Route("/apple-touch-icon.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
+    Route("/apple-touch-icon-precomposed.png", lambda r: _icon("icons/apple-touch-icon.png", "image/png")),
+    Route("/manifest.webmanifest", lambda r: _icon("manifest.webmanifest", "application/manifest+json")),
     Route("/api/settings", get_settings, methods=["GET"]),
     Route("/api/settings", put_settings, methods=["PUT"]),
     Route("/api/hosts", list_hosts, methods=["GET"]),
@@ -368,12 +377,18 @@ routes = [
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]
 
+PUBLIC_PATHS = {"/healthz", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
+                "/manifest.webmanifest"}
+
+
 class BasicAuth(BaseHTTPMiddleware):
     """Вход в панель. Панель управляет firewall всех хостов, поэтому без пароля (ZASLON_PASSWORD)
     она отвечает только на запросы с этой же машины (127.0.0.1)."""
 
     async def dispatch(self, request, call_next):
-        if request.url.path == "/healthz":
+        path = request.url.path
+        # проверка работы и значки (браузер и плитки запрашивают их без пароля) — открыты
+        if path in PUBLIC_PATHS or path.startswith("/static/icons/"):
             return await call_next(request)
         pw = os.environ.get("ZASLON_PASSWORD", "")
         if not pw:
