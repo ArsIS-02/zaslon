@@ -125,7 +125,20 @@ bash scripts/zaslon-deploy.sh
 - **Сменить:** отредактируйте `ZASLON_PASSWORD=` в `~/zaslon/.env` и выполните `docker compose up -d` в `~/zaslon`. Повторные запуски `zaslon-deploy.sh` пароль не трогают.
 - **Без пароля** панель доступна только с самого хоста (`127.0.0.1`), из сети она отвечает отказом.
 
-### Вручную через Docker
+### Готовый образ
+
+Образы для `linux/amd64` и `linux/arm64` публикуются в GitHub Container Registry при каждом релизе — Docker сам скачает образ под архитектуру хоста. Хосты готовятся так же (шаги 1–2), а на хосте панели вместо сборки:
+
+```bash
+git clone https://github.com/ArsIS-02/zaslon.git ~/zaslon && cd ~/zaslon
+mkdir -p data/keys && cp ~/ZaSlon/keys/zaslon_ed25519* data/keys/ && chmod 600 data/keys/zaslon_ed25519
+printf 'ZASLON_UID=%s\nZASLON_GID=%s\nZASLON_PASSWORD=%s\n' "$(id -u)" "$(id -g)" "$(openssl rand -base64 18)" > .env
+docker compose pull && docker compose up -d
+```
+
+Конкретная версия: `ZASLON_TAG=1.1.0` в `.env`. Для хостов без доступа к интернету к каждому [релизу](https://github.com/ArsIS-02/zaslon/releases) приложены архивы образов: `docker load -i zaslon-<версия>-linux-amd64.tar.gz`.
+
+### Вручную через Docker (сборка из исходников)
 
 ```bash
 mkdir -p data/keys && cp ~/ZaSlon/keys/zaslon_ed25519* data/keys/ && chmod 600 data/keys/zaslon_ed25519
