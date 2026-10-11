@@ -20,7 +20,7 @@ from . import analysis, report, store
 from .transport import HostError, reset_hostkey, transport_for
 
 STATIC = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 _host_locks = {}
 
 
