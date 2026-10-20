@@ -1,4 +1,4 @@
 Сторонние компоненты, входящие в ZaSlon:
 - Inter — SIL Open Font License 1.1, https://rsms.me/inter/
 - DejaVu Sans Mono — Bitstream Vera Fonts License, https://dejavu-fonts.github.io/
-Устанавливаются при сборке образа: Starlette, Uvicorn (BSD-3-Clause), OpenSSH client, Chromium (для PDF-отчётов; BSD и др.).
+Устанавливаются при сборке образа: Starlette, Uvicorn (BSD-3-Clause), OpenSSH client.
