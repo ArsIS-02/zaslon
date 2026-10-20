@@ -1,4 +1,0 @@
-#!/bin/sh
-echo "$@" >> /tmp/fake/systemctl.log
-[ "$1" = is-active ] && echo active
-exit 0

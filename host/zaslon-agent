@@ -1,0 +1,570 @@
+#!/usr/bin/python3 -I
+"""ZaSlon agent — работает на хосте РЕД ОС от root.
+
+Панель вызывает его по SSH: ключ в authorized_keys ограничен командой
+`sudo -n /usr/local/libexec/zaslon/agent`, поэтому shell недоступен.
+На вход — один JSON-запрос в stdin: {"op": "...", "args": {...}}.
+На выход — один JSON-ответ в stdout: {"ok": true, ...} или {"ok": false, "error", "kind"}.
+
+Каждое изменение (порт, служба, firewalld, SELinux) записывает откат и ставит
+таймер systemd: если в течение timeout секунд панель не подтвердила изменение,
+откат выполняется сам. Так плохое правило не отрежет доступ к хосту навсегда.
+Только стандартная библиотека Python.
+"""
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+STATE = os.environ.get("ZASLON_STATE", "/var/lib/zaslon")
+TX_DIR = os.path.join(STATE, "tx")
+SELINUX_CONFIG = os.environ.get("ZASLON_SELINUX_CONFIG", "/etc/selinux/config")
+AGENT_PATH = os.environ.get("ZASLON_AGENT_PATH", "/usr/local/libexec/zaslon/agent")
+ALLOW_NONROOT = os.environ.get("ZASLON_TEST_NONROOT") == "1"   # только для тестов
+DEFAULT_TIMEOUT = 120
+MAX_TIMEOUT = 900
+TX_KEEP = 50
+
+ZONE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+BOOL_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+MODES = ("enforcing", "permissive", "disabled")
+
+
+class Fail(Exception):
+    def __init__(self, msg, kind="error"):
+        super().__init__(msg)
+        self.kind = kind
+
+
+# ---------- запуск команд ----------
+
+def run(argv, check=True, timeout=30):
+    """Команда без shell: только список аргументов."""
+    exe = shutil.which(argv[0])
+    if exe is None:
+        raise Fail("Не найдена команда %s на хосте" % argv[0], kind="missing_tool")
+    try:
+        p = subprocess.run([exe] + argv[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           timeout=timeout, universal_newlines=True)
+    except subprocess.TimeoutExpired:
+        raise Fail("Команда %s не ответила за %d с" % (argv[0], timeout), kind="timeout")
+    if check and p.returncode != 0:
+        msg = (p.stderr or p.stdout or "").strip() or "код %d" % p.returncode
+        raise Fail("%s: %s" % (" ".join(argv[:2]), msg), kind="command")
+    return p.returncode, p.stdout, p.stderr
+
+
+def fw(args, check=True):
+    return run(["firewall-cmd"] + args, check=check)
+
+
+def fw_running():
+    rc, out, _ = run(["firewall-cmd", "--state"], check=False)
+    return rc == 0 and out.strip() == "running"
+
+
+def need_firewalld():
+    if not fw_running():
+        raise Fail("FirewallD не запущен: изменения портов и служб сейчас невозможны. Включите firewalld.",
+                   kind="firewalld_off")
+
+
+def zone_names():
+    return fw(["--get-zones"])[1].split()
+
+
+def check_zone(zone):
+    if not ZONE_RE.match(zone or ""):
+        raise Fail("Некорректное имя зоны", kind="validation")
+    if zone not in zone_names():
+        raise Fail("Зоны %s нет на хосте" % zone, kind="validation")
+
+
+def zone_items(zone, what, permanent=False):
+    args = ["--zone=" + zone, "--list-" + what] + (["--permanent"] if permanent else [])
+    rc, out, _ = fw(args, check=False)
+    if rc != 0:
+        return []
+    if what == "rich-rules":
+        return [line.strip() for line in out.splitlines() if line.strip()]
+    return out.split()
+
+
+def query(zone, kind, value, permanent=False):
+    args = ["--zone=" + zone, "--query-%s=%s" % (kind, value)] + (["--permanent"] if permanent else [])
+    rc, _, _ = fw(args, check=False)
+    return rc == 0
+
+
+# ---------- валидация ----------
+
+def norm_port(p):
+    m = re.match(r"^(\d{1,5})(?:-(\d{1,5}))?$", str(p or ""))
+    if not m:
+        raise Fail("Порт должен быть числом 1–65535 или диапазоном, например 8000-8010", kind="validation")
+    a = int(m.group(1))
+    b = int(m.group(2) or a)
+    if not (1 <= a <= 65535 and 1 <= b <= 65535 and a <= b):
+        raise Fail("Порт вне диапазона 1–65535", kind="validation")
+    return str(a) if a == b else "%d-%d" % (a, b)
+
+
+def norm_proto(p):
+    if p not in ("tcp", "udp"):
+        raise Fail("Протокол: tcp или udp", kind="validation")
+    return p
+
+
+def norm_timeout(t):
+    try:
+        t = int(t)
+    except (TypeError, ValueError):
+        raise Fail("Некорректный таймер отката", kind="validation")
+    return max(0, min(MAX_TIMEOUT, t))
+
+
+# ---------- транзакции и откат ----------
+
+def tx_path(tid):
+    if not re.match(r"^[0-9a-f]{32}$", tid or ""):
+        raise Fail("Некорректный идентификатор изменения", kind="validation")
+    return os.path.join(TX_DIR, tid + ".json")
+
+
+def tx_load(tid):
+    try:
+        with open(tx_path(tid)) as f:
+            return json.load(f)
+    except (IOError, OSError, ValueError):
+        raise Fail("Изменение %s не найдено" % tid, kind="not_found")
+
+
+def tx_save(rec):
+    os.makedirs(TX_DIR, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=TX_DIR)
+    with os.fdopen(fd, "w") as f:
+        json.dump(rec, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, tx_path(rec["id"]))
+    prune()
+
+
+def prune():
+    names = sorted(os.listdir(TX_DIR), key=lambda n: os.path.getmtime(os.path.join(TX_DIR, n)))
+    for n in names[:-TX_KEEP]:
+        try:
+            os.remove(os.path.join(TX_DIR, n))
+        except OSError:
+            pass
+
+
+def apply_undo(items):
+    """Откат: список действий {"argv": [...]} или {"write": путь, "text": ...}."""
+    errors = []
+    for it in items:
+        try:
+            if "write" in it:
+                atomic_write(it["write"], it["text"])
+            else:
+                run(it["argv"], check=True)
+        except Fail as e:
+            errors.append(str(e))
+    return errors
+
+
+def atomic_write(path, text):
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    try:
+        st = os.stat(path)
+        os.chmod(tmp, st.st_mode & 0o7777)
+    except OSError:
+        os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def timer_name(tid):
+    return "zaslon-rb-" + tid
+
+
+def tx_begin(kind, summary, undo, timeout):
+    """Регистрирует изменение. timeout=0 — без таймера (сразу подтверждено)."""
+    tid = uuid.uuid4().hex
+    now = time.time()
+    rec = {"id": tid, "kind": kind, "summary": summary, "undo": undo, "created": now,
+           "timeout": timeout, "expires": now + timeout if timeout else None,
+           "state": "pending" if timeout else "confirmed"}
+    if timeout:
+        tx_save(rec)
+        rc, _, err = run(["systemd-run", "--unit=" + timer_name(tid),
+                          "--on-active=%ds" % timeout, "--description=ZaSlon rollback " + tid,
+                          AGENT_PATH, "--rollback-timer", tid], check=False)
+        if rc != 0:
+            # без таймера откат не гарантирован — откатываем сразу и сообщаем
+            apply_undo(undo)
+            rec["state"] = "rolled_back"
+            tx_save(rec)
+            raise Fail("Не удалось поставить таймер отката (%s). Изменение отменено." % err.strip(),
+                       kind="timer")
+    else:
+        tx_save(rec)
+    return rec
+
+
+def stop_timer(tid):
+    run(["systemctl", "stop", timer_name(tid) + ".timer"], check=False)
+
+
+def op_tx_list(_a):
+    items = []
+    for name in sorted(os.listdir(TX_DIR)) if os.path.isdir(TX_DIR) else []:
+        try:
+            with open(os.path.join(TX_DIR, name)) as f:
+                r = json.load(f)
+        except (IOError, OSError, ValueError):
+            continue
+        items.append({k: r.get(k) for k in ("id", "kind", "summary", "state", "created", "expires", "timeout")})
+    items.sort(key=lambda r: r.get("created") or 0, reverse=True)
+    return {"items": items, "pending": [r for r in items if r["state"] == "pending"]}
+
+
+def op_tx_confirm(a):
+    rec = tx_load(a.get("id"))
+    if rec["state"] != "pending":
+        return {"state": rec["state"], "message": rec["summary"]}
+    stop_timer(rec["id"])
+    rec["state"] = "confirmed"
+    tx_save(rec)
+    return {"state": "confirmed", "message": "Подтверждено: " + rec["summary"]}
+
+
+def op_tx_rollback(a):
+    rec = tx_load(a.get("id"))
+    if rec["state"] != "pending":
+        raise Fail("Изменение уже %s" % ("подтверждено" if rec["state"] == "confirmed" else "откатано"),
+                   kind="validation")
+    errors = apply_undo(rec["undo"])
+    stop_timer(rec["id"])
+    rec["state"] = "rolled_back"
+    tx_save(rec)
+    return {"state": "rolled_back", "errors": errors, "message": "Откатано: " + rec["summary"]}
+
+
+def rollback_timer(tid):
+    """Вызов из systemd-таймера: откат, если изменение ещё не подтверждено."""
+    try:
+        rec = tx_load(tid)
+    except Fail:
+        return
+    if rec["state"] == "pending":
+        apply_undo(rec["undo"])
+        rec["state"] = "rolled_back"
+        rec["auto"] = True
+        tx_save(rec)
+
+
+# ---------- firewalld ----------
+
+def parse_list_all(text):
+    """Разбор вывода firewall-cmd --list-all-zones: одна команда вместо десятков."""
+    zones = {}
+    cur = None
+    key = None
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        if not raw[0].isspace():
+            name = raw.split()[0]
+            cur = zones[name] = {"default": "default" in raw, "ports": [], "services": [],
+                                 "interfaces": [], "rich": []}
+            key = None
+            continue
+        if cur is None:
+            continue
+        if key == "rich rules" and raw[0] == "\t":
+            cur["rich"].append(raw.strip())
+            continue
+        m = re.match(r"^\s{1,2}([a-z][a-z \-]*?):\s*(.*)$", raw)
+        if not m:
+            continue
+        key = m.group(1).strip()
+        if key in ("ports", "services", "interfaces"):
+            cur[key] = m.group(2).split()
+        elif key == "rich rules":
+            cur["rich"] = []
+    return zones
+
+
+def op_status(_a):
+    running = fw_running()
+    rc_active, out_active, _ = run(["systemctl", "is-active", "firewalld"], check=False)
+    rc_en, out_en, _ = run(["systemctl", "is-enabled", "firewalld"], check=False)
+    zones = []
+    default = ""
+    if running:
+        default = fw(["--get-default-zone"])[1].strip()
+        rt = parse_list_all(fw(["--list-all-zones"])[1])
+        pm = parse_list_all(fw(["--permanent", "--list-all-zones"])[1])
+        for name in sorted(rt):
+            z = rt[name]
+            p = pm.get(name, {})
+            zones.append({
+                "name": name,
+                "default": name == default,
+                "ports": z["ports"],
+                "services": z["services"],
+                "interfaces": z["interfaces"],
+                "rich": z["rich"],
+                "ports_perm": p.get("ports", []),
+                "services_perm": p.get("services", []),
+            })
+    return {
+        "host": socket.gethostname(),
+        "firewalld": {"running": running, "active": out_active.strip() == "active",
+                      "enabled": out_en.strip() == "enabled"},
+        "default_zone": default,
+        "zones": zones,
+        "selinux": selinux_status(),
+        "pending": op_tx_list({})["pending"],
+    }
+
+
+def fw_change(a, kind):
+    """kind = port | service. Меняет и runtime, и постоянное правило."""
+    need_firewalld()
+    zone = a.get("zone") or ""
+    check_zone(zone)
+    add = bool(a.get("add"))
+    if kind == "port":
+        value = "%s/%s" % (norm_port(a.get("port")), norm_proto(a.get("proto")))
+        label = "порт %s" % value
+    else:
+        if not SERVICE_RE.match(a.get("service") or ""):
+            raise Fail("Некорректное имя службы", kind="validation")
+        value = a["service"]
+        label = "служба %s" % value
+    timeout = norm_timeout(a.get("timeout", DEFAULT_TIMEOUT))
+
+    before_rt = query(zone, kind, value)
+    before_pm = query(zone, kind, value, permanent=True)
+    if add and before_rt and before_pm or (not add and not before_rt and not before_pm):
+        return {"changed": False, "message": "Уже %s" % ("открыт" if add else "закрыт")}
+
+    flag = "--add-%s=%s" % (kind, value) if add else "--remove-%s=%s" % (kind, value)
+    undo = []
+    # откат — обратное действие только для того, что действительно поменялось
+    if add:
+        if not before_rt:
+            undo.append({"argv": ["firewall-cmd", "--zone=" + zone, "--remove-%s=%s" % (kind, value)]})
+        if not before_pm:
+            undo.append({"argv": ["firewall-cmd", "--permanent", "--zone=" + zone,
+                                  "--remove-%s=%s" % (kind, value)]})
+    else:
+        if before_rt:
+            undo.append({"argv": ["firewall-cmd", "--zone=" + zone, "--add-%s=%s" % (kind, value)]})
+        if before_pm:
+            undo.append({"argv": ["firewall-cmd", "--permanent", "--zone=" + zone,
+                                  "--add-%s=%s" % (kind, value)]})
+    verb = "открыть" if add else "закрыть"
+    summary = "%s %s в зоне %s" % (verb.capitalize(), label, zone)
+    tx = tx_begin(kind, summary, undo, timeout) if undo else None
+    if not add and before_rt:
+        fw(["--zone=" + zone, flag])
+    if not add and before_pm:
+        fw(["--permanent", "--zone=" + zone, flag])
+    if add and not before_rt:
+        fw(["--zone=" + zone, flag])
+    if add and not before_pm:
+        fw(["--permanent", "--zone=" + zone, flag])
+    return {"changed": True, "message": summary, "tx": tx and tx["id"], "timeout": timeout}
+
+
+def op_port_change(a):
+    return fw_change(a, "port")
+
+
+def op_service_change(a):
+    return fw_change(a, "service")
+
+
+def op_firewalld_set(a):
+    want_running = bool(a.get("running"))
+    want_enabled = bool(a.get("enabled"))
+    timeout = norm_timeout(a.get("timeout", DEFAULT_TIMEOUT))
+    rc, out, _ = run(["systemctl", "is-active", "firewalld"], check=False)
+    was_running = out.strip() == "active"
+    rc, out, _ = run(["systemctl", "is-enabled", "firewalld"], check=False)
+    was_enabled = out.strip() == "enabled"
+    if was_running == want_running and was_enabled == want_enabled:
+        return {"changed": False, "message": "firewalld уже в нужном состоянии"}
+    undo = []
+    if was_running != want_running:
+        undo.append({"argv": ["systemctl", "start" if was_running else "stop", "firewalld"]})
+    if was_enabled != want_enabled:
+        undo.append({"argv": ["systemctl", "enable" if was_enabled else "disable", "firewalld"]})
+    parts = []
+    if want_running != was_running:
+        parts.append("запустить" if want_running else "остановить")
+    if want_enabled != was_enabled:
+        parts.append("включить автозапуск" if want_enabled else "выключить автозапуск")
+    summary = "firewalld: " + ", ".join(parts)
+    tx = tx_begin("firewalld", summary, undo, timeout)
+    # порядок: сначала автозапуск, потом состояние
+    if want_enabled != was_enabled:
+        run(["systemctl", "enable" if want_enabled else "disable", "firewalld"])
+    if want_running != was_running:
+        run(["systemctl", "start" if want_running else "stop", "firewalld"])
+    return {"changed": True, "message": summary, "tx": tx["id"], "timeout": timeout}
+
+
+# ---------- SELinux ----------
+
+def selinux_status():
+    rc, out, _ = run(["getenforce"], check=False)
+    runtime = out.strip().lower() if rc == 0 and out.strip() else "unknown"
+    return {"runtime": runtime, "config": config_mode(), "booleans_ok": shutil.which("getsebool") is not None}
+
+
+def config_text():
+    try:
+        with open(SELINUX_CONFIG) as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
+def config_mode():
+    text = config_text()
+    if text is None:
+        return "unknown"
+    m = re.search(r"^SELINUX=(\S+)", text, re.M)
+    return m.group(1).lower() if m else "unknown"
+
+
+def op_selinux_mode(a):
+    mode = (a.get("mode") or "").lower()
+    if mode not in MODES:
+        raise Fail("Режим SELinux: enforcing, permissive или disabled", kind="validation")
+    timeout = norm_timeout(a.get("timeout", DEFAULT_TIMEOUT))
+    before_rt = selinux_status()["runtime"]
+    before_text = config_text()
+    if before_text is None:
+        raise Fail("Нет %s — SELinux на хосте не настроен" % SELINUX_CONFIG, kind="validation")
+    before_cfg = config_mode()
+    if before_cfg == mode and (mode == "disabled" or before_rt == mode):
+        return {"changed": False, "message": "SELinux уже %s" % mode}
+    new_text = re.sub(r"^SELINUX=\S+", "SELINUX=" + mode, before_text, flags=re.M)
+    if "SELINUX=" not in new_text:
+        new_text = "SELINUX=%s\n" % mode + new_text
+    undo = [{"write": SELINUX_CONFIG, "text": before_text}]
+    if before_rt in ("enforcing", "permissive"):
+        undo.append({"argv": ["setenforce", "1" if before_rt == "enforcing" else "0"]})
+    summary = "SELinux: режим %s" % mode
+    tx = tx_begin("selinux", summary, undo, timeout)
+    reboot = False
+    if mode in ("enforcing", "permissive") and before_rt != mode:
+        if before_rt == "disabled":
+            reboot = True   # из disabled переключить на лету нельзя
+        else:
+            run(["setenforce", "1" if mode == "enforcing" else "0"])
+    if mode == "disabled" and before_rt != "disabled":
+        reboot = True
+    atomic_write(SELINUX_CONFIG, new_text)
+    return {"changed": True, "message": summary, "tx": tx["id"], "timeout": timeout,
+            "reboot_required": reboot}
+
+
+def op_selinux_booleans(_a):
+    rc, out, _ = run(["getsebool", "-a"], check=False)
+    items = []
+    for line in out.splitlines():
+        m = re.match(r"^(\S+)\s+-->\s+(on|off)$", line.strip())
+        if m:
+            items.append({"name": m.group(1), "value": m.group(2) == "on"})
+    items.sort(key=lambda x: x["name"])
+    return {"items": items}
+
+
+def get_bool(name):
+    rc, out, _ = run(["getsebool", name], check=False)
+    m = re.search(r"-->\s+(on|off)", out)
+    if rc != 0 or not m:
+        raise Fail("Булева опция %s не найдена" % name, kind="validation")
+    return m.group(1) == "on"
+
+
+def op_selinux_bool(a):
+    name = a.get("name") or ""
+    if not BOOL_RE.match(name):
+        raise Fail("Некорректное имя булевой опции", kind="validation")
+    want = bool(a.get("value"))
+    persistent = a.get("persistent", True) is not False
+    timeout = norm_timeout(a.get("timeout", DEFAULT_TIMEOUT))
+    before = get_bool(name)
+    if before == want:
+        return {"changed": False, "message": "%s уже %s" % (name, "on" if want else "off")}
+    flag = ["-P"] if persistent else []
+    undo = [{"argv": ["setsebool"] + flag + [name, "on" if before else "off"]}]
+    summary = "SELinux: %s = %s%s" % (name, "on" if want else "off", " (постоянно)" if persistent else "")
+    tx = tx_begin("selinux_bool", summary, undo, timeout)
+    run(["setsebool"] + flag + [name, "on" if want else "off"])
+    return {"changed": True, "message": summary, "tx": tx["id"], "timeout": timeout}
+
+
+# ---------- точка входа ----------
+
+OPS = {
+    "status": op_status,
+    "port_change": op_port_change,
+    "service_change": op_service_change,
+    "firewalld_set": op_firewalld_set,
+    "selinux_mode": op_selinux_mode,
+    "selinux_booleans": op_selinux_booleans,
+    "selinux_bool": op_selinux_bool,
+    "tx_list": op_tx_list,
+    "tx_confirm": op_tx_confirm,
+    "tx_rollback": op_tx_rollback,
+}
+
+
+def reply(obj):
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def main(argv):
+    if os.geteuid() != 0 and not ALLOW_NONROOT:
+        reply({"ok": False, "error": "Агент должен запускаться от root (через sudo)", "kind": "auth"})
+        return 1
+    if len(argv) == 3 and argv[1] == "--rollback-timer":
+        rollback_timer(argv[2])
+        return 0
+    try:
+        req = json.loads(sys.stdin.read() or "{}")
+        op = req.get("op")
+        if op not in OPS:
+            raise Fail("Неизвестная операция", kind="validation")
+        res = OPS[op](req.get("args") or {})
+        out = {"ok": True}
+        out.update(res)
+        reply(out)
+        return 0
+    except Fail as e:
+        reply({"ok": False, "error": str(e), "kind": e.kind})
+        return 0
+    except (ValueError, TypeError) as e:
+        reply({"ok": False, "error": "Некорректный запрос: %s" % e, "kind": "validation"})
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

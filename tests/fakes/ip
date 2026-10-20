@@ -1,2 +1,0 @@
-#!/bin/sh
-echo "10.42.0.5 dev eth0 src 10.42.0.20"

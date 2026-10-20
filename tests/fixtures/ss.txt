@@ -1,7 +1,0 @@
-udp UNCONN 0      0                         0.0.0.0:5353  0.0.0.0:* users:(("avahi-daemon",pid=679,fd=13))
-udp UNCONN 0      0                       127.0.0.1:323   0.0.0.0:* users:(("chronyd",pid=481,fd=5))
-udp UNCONN 0      0                   127.0.0.53%lo:53    0.0.0.0:* users:(("systemd-resolve",pid=639,fd=16))
-tcp LISTEN 0      128                       0.0.0.0:22    0.0.0.0:* users:(("sshd",pid=812,fd=3))
-tcp LISTEN 0      4096                      0.0.0.0:8080  0.0.0.0:* users:(("docker-proxy",pid=1360,fd=7))
-tcp LISTEN 0      511                          [::]:80       [::]:* users:(("nginx",pid=900,fd=8),("nginx",pid=901,fd=8))
-tcp LISTEN 0      4096                            *:9090        *:* users:(("systemd",pid=1,fd=138))
