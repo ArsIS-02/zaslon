@@ -15,6 +15,21 @@ ZaSlon не заменяет firewalld и не держит собственны
 - Интерфейс на русском и английском, светлая и тёмная темы.
 - Раздел «Справка» с инструкциями и примерами.
 
+## Скриншоты
+
+| | |
+|---|---|
+| ![Обзор хостов](docs/screenshots/hosts.png) | ![Страница хоста: файрволл](docs/screenshots/host-firewall.png) |
+| Обзор: состояние каждого хоста, открытые порты, ожидающие подтверждения изменения | Страница хоста: firewalld, порты по зонам, службы, зоны |
+| ![SELinux](docs/screenshots/host-selinux.png) | ![Журнал](docs/screenshots/audit.png) |
+| SELinux: режим и булевы опции с переключателями | Журнал действий панели на понятном языке |
+| ![Новый хост](docs/screenshots/add-host.png) | ![Подтверждение](docs/screenshots/confirm-delete.png) |
+| Новый хост: команда установки формируется по полям | Подтверждение действия в стиле панели |
+| ![Справка](docs/screenshots/help-agent.png) | ![Администрирование](docs/screenshots/admin.png) |
+| Справка с инструкцией по установке агента | Администрирование: смена пароля панели |
+
+Светлая тема и английский интерфейс: [hosts-light.png](docs/screenshots/hosts-light.png), [hosts-en.png](docs/screenshots/hosts-en.png). Страница входа: [login.png](docs/screenshots/login.png).
+
 ## Как устроено
 
     браузер ──HTTPS──▶ панель (контейнер) ──SSH, ключ панели──▶ хост РЕД ОС
