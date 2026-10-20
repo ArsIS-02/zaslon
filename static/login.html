@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#182027">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("zaslon-theme")==="light"?"light":"dark";}catch(e){document.documentElement.dataset.theme="dark";}</script>
+  <title>ZaSlon</title>
+  <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="login">
+  <form class="card login-card" id="login-form">
+    <h1><img src="/static/icons/icon.svg" alt="">ZaSlon</h1>
+    <div class="login-tools">
+      <div class="segmented" role="group" aria-label="Язык">
+        <button class="seg" data-lang="ru" type="button">RU</button>
+        <button class="seg" data-lang="en" type="button">EN</button>
+      </div>
+      <button class="btn ghost icon" id="btn-theme" type="button" title="Светлая тема"></button>
+    </div>
+    <label><span data-i18n="Логин">Логин</span><input name="login" id="f-login" autocomplete="username" value="admin" required></label>
+    <label><span data-i18n="Пароль">Пароль</span><input name="password" id="f-password" type="password" autocomplete="current-password" autofocus required></label>
+    <p class="err" id="login-err" role="alert"></p>
+    <button class="primary" type="submit" id="login-btn" data-i18n="Войти">Войти</button>
+  </form>
+  <script type="module">
+    import { T, tc, getLang, setLang, getTheme, setTheme, applyStatic } from "/static/i18n.js";
+    var next = new URLSearchParams(location.search).get("next") || "/";
+    if (next.charAt(0) !== "/" || next.charAt(1) === "/" || next.indexOf("/login.html") === 0) next = "/";
+    function paint() {
+      document.querySelectorAll("[data-lang]").forEach(function (b) { b.classList.toggle("on", b.dataset.lang === getLang()); });
+      var tb = document.getElementById("btn-theme");
+      var light = getTheme() === "light";
+      tb.textContent = light ? "☾" : "☀";
+      tb.setAttribute("title", T(light ? "Тёмная тема" : "Светлая тема"));
+    }
+    document.querySelectorAll("[data-lang]").forEach(function (b) {
+      b.addEventListener("click", function () { setLang(b.dataset.lang); paint(); });
+    });
+    document.getElementById("btn-theme").addEventListener("click", function () {
+      setTheme(getTheme() === "light" ? "dark" : "light"); paint();
+    });
+    document.getElementById("login-form").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var err = document.getElementById("login-err"), btn = document.getElementById("login-btn");
+      err.textContent = ""; btn.disabled = true;
+      fetch("/api/login", {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-Zaslon": "1" },
+        body: JSON.stringify({ login: document.getElementById("f-login").value,
+                               password: document.getElementById("f-password").value })
+      }).then(function (r) {
+        if (r.ok) { location.replace(next); return; }
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          err.textContent = d.error ? T(d.error) : tc("Ошибка входа (HTTP ", r.status, ")");
+          document.getElementById("f-password").value = "";
+        });
+      }).catch(function () { err.textContent = T("Панель недоступна."); })
+        .then(function () { btn.disabled = false; });
+    });
+    applyStatic();
+    paint();
+  </script>
+</body>
+</html>

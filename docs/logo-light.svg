@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="400" height="96" viewBox="0 0 400 96">
-  <g transform="translate(4 12) scale(1.125)"><rect width="64" height="64" rx="15" fill="#182027"/><g fill="#5a6d7e"><rect x="10" y="15" width="20.5" height="9.5" rx="2"/><rect x="33.5" y="15" width="20.5" height="9.5" rx="2"/><rect x="10" y="27.25" width="9" height="9.5" rx="2"/><rect x="45" y="27.25" width="9" height="9.5" rx="2"/><rect x="10" y="39.5" width="20.5" height="9.5" rx="2"/><rect x="33.5" y="39.5" width="20.5" height="9.5" rx="2"/></g><rect x="22" y="27.25" width="20" height="9.5" rx="2" fill="#6fa8c9"/></g>
-  <text x="96" y="64" font-family="Inter, 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="46" font-weight="600" letter-spacing="-1" fill="#15212c">ZaSlon</text>
-</svg>
