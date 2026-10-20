@@ -99,3 +99,7 @@ ZaSlon не заменяет firewalld и не держит собственны
     python3 tests/test_enroll.py      # регистрация хостов, CA, выход из системы
 
 Для работы нужны Python 3 и Starlette (`requirements.txt`).
+
+## Лицензия
+
+MIT — см. файл [LICENSE](LICENSE). Сторонние компоненты перечислены в [THIRD_PARTY.txt](THIRD_PARTY.txt).
