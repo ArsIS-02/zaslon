@@ -117,4 +117,4 @@ ZaSlon не заменяет firewalld и не держит собственны
 
 ## Лицензия
 
-MIT — см. файл [LICENSE](LICENSE). Сторонние компоненты перечислены в [THIRD_PARTY.txt](THIRD_PARTY.txt).
+GPL-3.0 — см. файл [LICENSE](LICENSE). Сторонние компоненты перечислены в [THIRD_PARTY.txt](THIRD_PARTY.txt).
