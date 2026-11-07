@@ -16,7 +16,7 @@ from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import auth, remote
+from . import auth, gelf, remote
 from .enroll import Enroll
 from .store import Store
 
@@ -28,6 +28,7 @@ LOGIN = os.environ.get("ZASLON_LOGIN", "admin")
 ADMIN_FILE = os.path.join(DATA, "admin.json")
 DOWNLOADS = {"zaslon-agent", "setup-host.sh", "zaslon-install.sh"}
 store = Store(DATA)
+GELF = gelf.Sender.from_env()
 enrolls = Enroll(DATA)
 CA_FILE = os.path.join(DATA, "ca", "root.crt")   # корневой сертификат, которым подписан HTTPS панели
 INSTALL_SCRIPT = os.path.join(ROOT, "host", "zaslon-install.sh")
@@ -58,6 +59,27 @@ def check_login(login, password):
 def secrets_eq(a, b):
     import secrets as _s
     return _s.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
+
+
+def send_to_graylog(entry):
+    """Запись журнала → Graylog. Адрес хоста берётся из списка: в записи хранится только имя."""
+    if not GELF:
+        return
+    host = entry.get("host", "")
+    addr = next((h["address"] for h in store.hosts() if host and host in (h["name"], h["id"])), "")
+    GELF.submit("ZaSlon: " + str(entry.get("message") or entry.get("op", "")) + (" — " + host if host else ""),
+                gelf.fields_for(entry, addr), gelf.level_for(entry))
+
+
+store.on_audit = send_to_graylog
+
+
+def client_ip(request):
+    """Адрес клиента; за обратным прокси — первый адрес из X-Forwarded-For (только для журнала)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()[:64]
+    return request.client.host if request.client else ""
 
 
 def ensure_key():
@@ -100,9 +122,15 @@ async def index(request):
 
 async def login(request):
     d = await body(request)
-    if not check_login(str(d.get("login", "")), str(d.get("password", ""))):
+    login_name = str(d.get("login", ""))[:64]
+    if not check_login(login_name, str(d.get("password", ""))):
+        store.audit({"who": "admin", "host": "", "op": "login_failed", "ok": False, "login": login_name,
+                     "ip": client_ip(request), "message": "Неудачная попытка входа в панель",
+                     "error": "неверный логин или пароль"})
         await asyncio.sleep(1)
         return fail("Неверный логин или пароль", 401, "auth")
+    store.audit({"who": "admin", "host": "", "op": "login", "ok": True, "login": login_name,
+                 "ip": client_ip(request), "message": "Вход в панель"})
     secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     resp = j({"ok": True})
     resp.set_cookie(auth.COOKIE, auth.make_session(secret()), max_age=auth.TTL, httponly=True,
@@ -304,6 +332,26 @@ async def audit(request):
     return j({"ok": True, "items": store.audit_tail()})
 
 
+async def gelf_info(request):
+    """Состояние отправки в Graylog для раздела «Администрирование»."""
+    if not GELF:
+        return j({"ok": True, "enabled": False})
+    return j({"ok": True, "enabled": True, "target": "%s:%d/%s" % (GELF.host, GELF.port, GELF.proto),
+              **GELF.status})
+
+
+async def gelf_test(request):
+    if not GELF:
+        return fail("Отправка в Graylog выключена: задайте ZASLON_GELF_HOST", 400, "validation")
+    try:
+        await run_in_threadpool(GELF.send_now, gelf.message(
+            "ZaSlon: тестовое сообщение", {"zs_source": "zaslon", "homelab_app": "zaslon", "zs_op": "test"},
+            GELF.source, 6))
+    except (OSError, ValueError) as e:
+        return fail("Graylog недоступен: %s" % e, 502, "error")
+    return j({"ok": True})
+
+
 async def admin_info(request):
     rec = admin_record()
     return j({"ok": True, "login": LOGIN, "source": "интерфейс" if rec else ".env"})
@@ -387,6 +435,8 @@ ROUTES = [
     Route("/api/enroll", enroll, methods=["POST"]),
     Route("/dl/{name}", download, methods=["GET"]),
     Route("/api/audit", audit, methods=["GET"]),
+    Route("/api/gelf", gelf_info, methods=["GET"]),
+    Route("/api/gelf/test", gelf_test, methods=["POST"]),
     Route("/api/hosts", list_hosts, methods=["GET"]),
     Route("/api/hosts", add_host, methods=["POST"]),
     Route("/api/hosts/{hid}", delete_host, methods=["DELETE"]),

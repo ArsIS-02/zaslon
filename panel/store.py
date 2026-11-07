@@ -13,6 +13,7 @@ class Store:
         self.hosts_path = os.path.join(data, "hosts.json")
         self.audit_path = os.path.join(data, "audit.jsonl")
         self.lock = threading.Lock()
+        self.on_audit = None    # вызывается после записи в журнал (отправка в Graylog), ошибки глушатся
 
     def _load(self):
         try:
@@ -60,6 +61,11 @@ class Store:
         with self.lock:
             with open(self.audit_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        if self.on_audit:
+            try:
+                self.on_audit(entry)
+            except Exception:  # noqa: BLE001 — журнал на диске важнее отправки
+                pass
 
     def audit_tail(self, n=200):
         try:

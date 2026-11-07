@@ -45,6 +45,8 @@ def free_port():
     return p
 
 
+GELF_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)   # приёмник вместо Graylog
+GELF_SOCK.bind(("127.0.0.1", 0))
 PORT = free_port()
 BASE = "http://127.0.0.1:%d" % PORT
 env = dict(os.environ)
@@ -53,6 +55,7 @@ env.update({
     "ZASLON_DATA": DATA, "ZASLON_PASSWORD": PW, "ZASLON_LOGIN": "admin",
     "ZASLON_FAKE": FAKE, "ZASLON_STATE": STATE, "ZASLON_SELINUX_CONFIG": SEL,
     "ZASLON_AGENT_PATH": os.path.join(ROOT, "host", "zaslon-agent"), "ZASLON_TEST_NONROOT": "1",
+    "ZASLON_GELF_HOST": "127.0.0.1", "ZASLON_GELF_PORT": str(GELF_SOCK.getsockname()[1]),
 })
 server = subprocess.Popen([sys.executable, "-m", "uvicorn", "panel.app:app", "--port", str(PORT),
                            "--host", "127.0.0.1"], cwd=ROOT, env=env,
@@ -154,10 +157,32 @@ def test_selinux_and_firewalld():
     req("POST", "/api/hosts/%s/tx/%s/rollback" % (h, d["tx"]), {}, expect=200)
 
 
+def test_graylog_journal():
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    from test_gelf import recv_all
+    msgs = recv_all(GELF_SOCK, wait=1.5)
+    by_op = {}
+    for m in msgs:
+        by_op.setdefault(m.get("_zs_op"), []).append(m)
+    assert by_op.get("login_failed") and by_op["login_failed"][0]["level"] == 4, sorted(by_op)
+    assert by_op["login_failed"][0]["_zs_client_ip"] == "127.0.0.1"
+    assert by_op.get("login") and by_op.get("host_add")
+    port = by_op["port_change"][0]
+    assert port["_zs_source"] == "zaslon" and port["_zs_host"] == "test" and port["_zs_host_address"] == "127.0.0.1"
+    assert port["_zs_arg_zone"] == "trusted" and port["_zs_ok"] == "true"
+    sel = [m for m in by_op["selinux_mode"] if m.get("_zs_arg_mode") == "permissive"]
+    assert sel and sel[0]["level"] == 4
+    _, g = req("GET", "/api/gelf", expect=200)
+    assert g["enabled"] and g["sent"] >= len(msgs) and g["errors"] == 0
+    req("POST", "/api/gelf/test", {}, expect=200)
+    assert any(m.get("_zs_op") == "test" for m in recv_all(GELF_SOCK))
+
+
 def test_audit_and_delete():
     h = hid()
     _, a = req("GET", "/api/audit", expect=200)
     assert a["items"] and any(i["op"] == "port_change" for i in a["items"])
+    assert any(i["op"] == "login_failed" and i["ip"] == "127.0.0.1" for i in a["items"])
     req("DELETE", "/api/hosts/" + h, expect=200)
     _, d = req("GET", "/api/hosts", expect=200)
     assert d["hosts"] == []

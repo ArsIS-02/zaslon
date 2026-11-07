@@ -853,6 +853,9 @@ function auditText(i) {
     case "host_add": return T("Добавлен хост") + " " + (i.host || "");
     case "host_remove": return T("Удалён хост") + " " + (i.host || "");
     case "admin_password": return T("Пароль панели изменён");
+    case "login": return T("Вход в панель") + (i.ip ? " " + T("с адреса") + " " + i.ip : "");
+    case "login_failed": return T("Неудачная попытка входа") + (i.login ? " (" + i.login + ")" : "") +
+      (i.ip ? " " + T("с адреса") + " " + i.ip : "");
     default: return T(i.message || LEGACY_OPS[i.op] || i.op);
   }
 }
@@ -974,6 +977,7 @@ function helpView(anchor) {
 async function adminView() {
   const info = await api("/api/admin").catch((e) => { toast(e.message, true); return {}; });
   const inst = await api("/api/install-info").catch(() => ({}));
+  const gl = await api("/api/gelf").catch(() => ({}));
   const cur = el("input", { name: "current", type: "password", autocomplete: "current-password", required: true });
   const nw = el("input", { name: "new", type: "password", autocomplete: "new-password", required: true, minlength: 8 });
   const rep = el("input", { name: "repeat", type: "password", autocomplete: "new-password", required: true, minlength: 8 });
@@ -1017,7 +1021,34 @@ async function adminView() {
           row("Логин", info.login || "—"),
           row("Источник пароля", info.source === "интерфейс" ? T("интерфейс") : ".env"),
           row("Версия панели", "1.3"),
-          row("Контрольная сумма агента", inst.agent_sha256 || "—")))));
+          row("Контрольная сумма агента", inst.agent_sha256 || "—"))),
+      graylogCard(gl)));
+}
+
+function graylogCard(gl) {
+  const row = (k, v) => [el("dt", null, k), el("dd", null, v)];
+  const when = (t) => t ? new Date(t * 1000).toLocaleString() : "—";
+  const test = el("button", { type: "button", disabled: !gl.enabled, onclick: async () => {
+    test.disabled = true;
+    try {
+      await api("/api/gelf/test", { method: "POST", body: {} });
+      toast("Тестовое сообщение отправлено");
+    } catch (ex) {
+      toast(ex.message, true);
+    } finally {
+      test.disabled = false;
+    }
+  } }, "Отправить тестовое сообщение");
+  return el("div", { class: "card" }, el("div", { class: "card-h" }, icon("clock"), el("h3", null, "Журнал в Graylog")),
+    gl.enabled
+      ? el("dl", { class: "kv" },
+        row("Куда", gl.target),
+        row("Отправлено", String(gl.sent || 0)),
+        row("Ошибок", String(gl.errors || 0)),
+        row("Последняя отправка", when(gl.last_ok)),
+        gl.last_error ? row("Последняя ошибка", gl.last_error) : null)
+      : el("p", { class: "muted small" }, "Отправка выключена. Чтобы журнал действий уходил в Graylog по GELF, задайте в .env ZASLON_GELF_HOST и ZASLON_GELF_PORT и перезапустите панель."),
+    el("div", { class: "actions" }, test));
 }
 
 window.addEventListener("hashchange", route);

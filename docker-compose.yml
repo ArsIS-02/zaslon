@@ -18,3 +18,7 @@ services:
       - ZASLON_LOGIN=${ZASLON_LOGIN:-admin}
       - ZASLON_PASSWORD=${ZASLON_PASSWORD:-}
       - TZ=${TZ:-UTC}
+      # журнал действий в Graylog по GELF (пусто — выключено)
+      - ZASLON_GELF_HOST=${ZASLON_GELF_HOST:-}
+      - ZASLON_GELF_PORT=${ZASLON_GELF_PORT:-12201}
+      - ZASLON_GELF_PROTO=${ZASLON_GELF_PROTO:-udp}

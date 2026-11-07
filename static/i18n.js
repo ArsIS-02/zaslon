@@ -21,6 +21,18 @@ export const EN = {
   "остановлен": "stopped",
   "автозапуск": "autostart",
   "Пароль панели изменён": "Panel password changed",
+  "Вход в панель": "Signed in to the panel",
+  "Неудачная попытка входа": "Failed sign-in attempt",
+  "с адреса": "from",
+  "Журнал в Graylog": "Journal to Graylog",
+  "Куда": "Destination",
+  "Отправлено": "Sent",
+  "Ошибок": "Errors",
+  "Последняя отправка": "Last sent",
+  "Последняя ошибка": "Last error",
+  "Отправить тестовое сообщение": "Send test message",
+  "Тестовое сообщение отправлено": "Test message sent",
+  "Отправка выключена. Чтобы журнал действий уходил в Graylog по GELF, задайте в .env ZASLON_GELF_HOST и ZASLON_GELF_PORT и перезапустите панель.": "Sending is off. To send the action journal to Graylog over GELF, set ZASLON_GELF_HOST and ZASLON_GELF_PORT in .env and restart the panel.",
   "Как установить агент": "How to install the agent",
   "Установка агента на хост": "Install the agent on a host",
   "Команда установки формируется по параметрам хоста — без терминала на панели.": "The install command is built from the host parameters — no terminal needed on the panel.",
@@ -261,10 +273,12 @@ export const EN = {
   "Удалить": "Remove",
   "Остановить firewalld?": "Stop firewalld?",
   "Остановить": "Stop",
+  "Отправка в Graylog выключена: задайте ZASLON_GELF_HOST": "Sending to Graylog is off: set ZASLON_GELF_HOST",
 };
 
 // шаблоны для строк с переменными (сообщения панели, агента и старые записи журнала)
 const PATTERNS = [
+  [/^Graylog недоступен: (.+)$/, (m) => `Graylog is unreachable: ${m[1]}`],
   [/^Хост (.+) не ответил за (\d+) с$/, (m) => `Host ${m[1]} did not respond within ${m[2]} s`],
   [/^Хост с адресом (.+) уже добавлен$/, (m) => `Host with address ${m[1]} is already added`],
   [/^Нет связи с (.+) по SSH: (.+)$/, (m) => `No SSH connection to ${m[1]}: ${m[2]}`],
