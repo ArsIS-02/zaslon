@@ -454,3 +454,4 @@ ROUTES = [
 
 ensure_key()
 app = Starlette(routes=ROUTES, middleware=[Middleware(Guard)])
+gelf.start_heartbeat(GELF, lambda: len(store.hosts()))   # пульс панели: молчание ловит Graylog

@@ -80,6 +80,19 @@ def test_from_env():
     assert (s.host, s.port, s.proto, s.source) == ("gl", 12206, "tcp", "zaslon")
 
 
+def test_heartbeat():
+    sock = udp()
+    snd = gelf.Sender("127.0.0.1", sock.getsockname()[1], "udp", "zaslon-test")
+    gelf.heartbeat(snd, 5)
+    snd.flush()
+    msgs = [m for m in recv_all(sock) if m.get("_zs_event") == "heartbeat"]
+    assert len(msgs) == 1 and msgs[0]["_zs_hosts_total"] == 5 and msgs[0]["level"] == 6
+    assert msgs[0]["_zs_source"] == "zaslon" and msgs[0]["_homelab_app"] == "zaslon"
+    assert "панель на связи" in msgs[0]["short_message"] and "5" in msgs[0]["short_message"]
+    gelf.heartbeat(None, 5)   # без отправителя — тихо, без исключений
+    assert recv_all(sock, 0.2) == []
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in [(k, v) for k, v in list(globals().items()) if k.startswith("test_")]:

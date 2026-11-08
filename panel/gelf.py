@@ -154,3 +154,41 @@ def fields_for(entry, address=""):
             k = "tx_id"
         f["zs_arg_" + k] = v
     return f
+
+
+# ---------- пульс панели ----------
+
+HB_EVERY = int(os.environ.get("ZASLON_GELF_HEARTBEAT") or 3600)
+
+
+def heartbeat(sender, hosts_total):
+    """Пульс панели: раз в час. По его отсутствию Graylog замечает, что молчит сама панель
+    (алерт «Тишина: ZaSlon»)."""
+    if not sender:
+        return
+    sender.submit("ZaSlon: панель на связи (хостов %d)" % hosts_total,
+                  {"zs_source": "zaslon", "homelab_app": "zaslon", "zs_event": "heartbeat",
+                   "zs_hosts_total": hosts_total}, 6)
+
+
+def start_heartbeat(sender, stats_fn, every=None):
+    """Фоновый пульс панели: первый — через минуту после старта, дальше раз в `every` секунд
+    (по умолчанию час). stats_fn() → hosts_total. Без настроенного GELF поток не стартует."""
+    if sender is None:
+        log.info("GELF не настроен — пульс панели выключен")
+        return None
+    every = every or HB_EVERY
+
+    def loop():
+        time.sleep(60)               # дать панели подняться; первый пульс — через минуту
+        while True:
+            try:
+                heartbeat(sender, stats_fn())
+            except Exception as e:   # noqa: BLE001 — пульс не должен умирать из-за одного прохода
+                log.warning("heartbeat: проход не удался: %s", e)
+            time.sleep(every)
+
+    t = threading.Thread(target=loop, name="zaslon-heartbeat", daemon=True)
+    t.start()
+    log.info("heartbeat: пульс панели каждые %d с", every)
+    return t
