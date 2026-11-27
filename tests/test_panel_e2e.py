@@ -197,6 +197,24 @@ def test_audit_and_delete():
     assert d["hosts"] == []
 
 
+def test_session_survives_process_restart():
+    global server
+    req("POST", "/api/login", {"login": "admin", "password": PW}, expect=200)
+    assert any(c.name == "zaslon_session" for c in jar)
+    server.terminate()
+    server.wait(timeout=10)
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "panel.app:app", "--port", str(PORT),
+                               "--host", "127.0.0.1"], cwd=ROOT, env=env,
+                              stdout=subprocess.DEVNULL, stderr=open(os.path.join(TMP, "server.log"), "a"))
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(BASE + "/healthz", timeout=1)
+            break
+        except Exception:  # noqa
+            time.sleep(0.1)
+    req("GET", "/api/hosts", expect=200)
+
+
 if __name__ == "__main__":
     failed = 0
     try:
