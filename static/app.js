@@ -1020,7 +1020,7 @@ async function adminView() {
         el("dl", { class: "kv" },
           row("Логин", info.login || "—"),
           row("Источник пароля", info.source === "интерфейс" ? T("интерфейс") : ".env"),
-          row("Версия панели", "1.3"),
+          row("Версия панели", "1.4.0"),
           row("Контрольная сумма агента", inst.agent_sha256 || "—"))),
       graylogCard(gl)));
 }

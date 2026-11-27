@@ -1,6 +1,6 @@
 # ZaSlon — панель управления firewalld, портами и SELinux на хостах РЕД ОС.
 FROM python:3.12-slim
-LABEL org.opencontainers.image.version="1.3" org.opencontainers.image.title="ZaSlon"
+LABEL org.opencontainers.image.version="1.4.0" org.opencontainers.image.title="ZaSlon"
 
 ARG ZASLON_UID=1000
 ARG ZASLON_GID=1000
