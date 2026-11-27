@@ -99,6 +99,15 @@ def test_auth():
     req("POST", "/api/hosts/x/port", {"zone": "public"}, csrf=False, expect=403)
 
 
+def test_versioned_static_assets():
+    _, d = req("GET", "/", expect=200)
+    html = d["raw"]
+    assert '<span class="ver">v1.4.0</span>' in html
+    assert '<script type="module" src="/static/app.js?v=1.4.0"></script>' in html
+    _, script = req("GET", "/static/app.js?v=1.4.0", expect=200)
+    assert 'const $app = document.getElementById("app")' in script["raw"]
+
+
 def test_key_and_host():
     _, d = req("GET", "/api/key", expect=200)
     assert d["key"] == PUB
