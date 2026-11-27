@@ -26,10 +26,10 @@ def ssh_argv(host, data):
             "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
             "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + kh,
             "-o", "IdentitiesOnly=yes", "-o", "LogLevel=ERROR",
-            # одно SSH-соединение на хост на несколько минут: повторные вызовы быстрые
-            "-o", "ControlMaster=auto", "-o", "ControlPersist=300",
-            "-o", "ControlPath=/tmp/zaslon-ssh-%C",
-            "%s@%s" % (host["user"], host["address"])]
+            # subprocess.run() ждёт каждый SSH-процесс. Фоновый ControlMaster
+            # завершался вне учёта Popen и оставлял зомби в uvicorn.
+            "-o", "ControlMaster=no", "-o", "ControlPersist=no",
+            "%s@%s" % (host["user"], host.get("connect_address") or host["address"])]
 
 
 def call(host, data, op, args=None, timeout=60):
