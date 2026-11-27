@@ -78,13 +78,16 @@ jobs:
           V="${GITHUB_REF_NAME#v}"
           for a in amd64 arm64; do
             LOCAL="$NAME:$V-linux-$a"
-            docker pull --platform "linux/$a" "$IMAGE:$V"
-            docker tag "$IMAGE:$V" "$LOCAL"
+            DIGEST="$(docker buildx imagetools inspect "$IMAGE:$V" --raw | jq -r --arg arch "$a" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')"
+            test -n "$DIGEST"
+            REF="$IMAGE@$DIGEST"
+            docker pull "$REF"
+            docker tag "$REF" "$LOCAL"
             ACTUAL="$(docker image inspect "$LOCAL" --format '{{.Os}}/{{.Architecture}}')"
-            echo "Архив $LOCAL: $ACTUAL"
+            echo "Архив $LOCAL: $ACTUAL, $DIGEST"
             test "$ACTUAL" = "linux/$a"
             docker save "$LOCAL" | gzip > "$NAME-$V-linux-$a.tar.gz"
-            docker rmi "$LOCAL" "$IMAGE:$V"
+            docker rmi "$LOCAL" "$REF"
           done
           ls -lh "$NAME"-*.tar.gz
 
