@@ -420,10 +420,26 @@ async def healthz(request):
     return j({"ok": True})
 
 
+PUBLIC_FILES = {
+    "favicon.ico": "icons/favicon.ico",
+    "apple-touch-icon.png": "icons/apple-touch-icon.png",
+    "manifest.webmanifest": "manifest.webmanifest",
+}
+
+
+async def public_file(request):
+    name = request.url.path.rsplit("/", 1)[-1]
+    return FileResponse(os.path.join(STATIC, PUBLIC_FILES[name]),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
 ROUTES = [
     Route("/", index, methods=["GET"]),
     Route("/login.html", login_page, methods=["GET"]),
     Route("/healthz", healthz, methods=["GET"]),
+    Route("/favicon.ico", public_file, methods=["GET"]),
+    Route("/apple-touch-icon.png", public_file, methods=["GET"]),
+    Route("/manifest.webmanifest", public_file, methods=["GET"]),
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
     Route("/api/login", login, methods=["POST"]),
     Route("/api/logout", logout, methods=["POST"]),
