@@ -77,10 +77,14 @@ jobs:
           set -e
           V="${GITHUB_REF_NAME#v}"
           for a in amd64 arm64; do
+            LOCAL="$NAME:$V-linux-$a"
             docker pull --platform "linux/$a" "$IMAGE:$V"
-            test "$(docker image inspect "$IMAGE:$V" --format '{{.Architecture}}')" = "$a"
-            docker save "$IMAGE:$V" | gzip > "$NAME-$V-linux-$a.tar.gz"
-            docker rmi "$IMAGE:$V"
+            docker tag "$IMAGE:$V" "$LOCAL"
+            ACTUAL="$(docker image inspect "$LOCAL" --format '{{.Os}}/{{.Architecture}}')"
+            echo "Архив $LOCAL: $ACTUAL"
+            test "$ACTUAL" = "linux/$a"
+            docker save "$LOCAL" | gzip > "$NAME-$V-linux-$a.tar.gz"
+            docker rmi "$LOCAL" "$IMAGE:$V"
           done
           ls -lh "$NAME"-*.tar.gz
 
